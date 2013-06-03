@@ -34,12 +34,6 @@ ifeq ($(strip $(TARGET_ARCH_VARIANT)),)
 TARGET_ARCH_VARIANT := mips32r2-fp
 endif
 
-ifeq ($(strip $(TARGET_GCC_VERSION_EXP)),)
-TARGET_GCC_VERSION := 4.7
-else
-TARGET_GCC_VERSION := $(TARGET_GCC_VERSION_EXP)
-endif
-
 TARGET_ARCH_SPECIFIC_MAKEFILE := $(BUILD_COMBOS)/arch/$(TARGET_ARCH)/$(TARGET_ARCH_VARIANT).mk
 ifeq ($(strip $(wildcard $(TARGET_ARCH_SPECIFIC_MAKEFILE))),)
 $(error Unknown MIPS architecture variant: $(TARGET_ARCH_VARIANT))
@@ -49,7 +43,7 @@ include $(TARGET_ARCH_SPECIFIC_MAKEFILE)
 
 # You can set TARGET_TOOLS_PREFIX to get gcc from somewhere else
 ifeq ($(strip $(TARGET_TOOLS_PREFIX)),)
-TARGET_TOOLCHAIN_ROOT := prebuilts/gcc/$(HOST_PREBUILT_TAG)/mips/mipsel-linux-android-$(TARGET_GCC_VERSION)
+TARGET_TOOLCHAIN_ROOT := prebuilts/gcc/$(HOST_PREBUILT_TAG)/mips/mipsel-linux-android-4.6
 TARGET_TOOLS_PREFIX := $(TARGET_TOOLCHAIN_ROOT)/bin/mipsel-linux-android-
 endif
 
@@ -87,23 +81,21 @@ endif
 TARGET_GLOBAL_CFLAGS += \
 			$(TARGET_mips_CFLAGS) \
 			-Ulinux -U__unix -U__unix__ -Umips \
-			-fpic -fPIE\
+			-fpic \
 			-ffunction-sections \
 			-fdata-sections \
 			-funwind-tables \
-			-Wa,--noexecstack \
 			-Werror=format-security \
-			-D_FORTIFY_SOURCE=2 \
 			$(arch_variant_cflags)
 
 android_config_h := $(call select-android-config-h,linux-mips)
 TARGET_ANDROID_CONFIG_CFLAGS := -include $(android_config_h) -I $(dir $(android_config_h))
 TARGET_GLOBAL_CFLAGS += $(TARGET_ANDROID_CONFIG_CFLAGS)
 
-# This warning causes dalvik not to build with gcc 4.6+ and -Werror.
+# This warning causes dalvik not to build with gcc 4.6.x and -Werror.
 # We cannot turn it off blindly since the option is not available
 # in gcc-4.4.x.
-ifneq ($(filter 4.6 4.6.% 4.7 4.7.%, $(shell $(TARGET_CC) --version)),)
+ifneq ($(filter 4.6 4.6.%, $(shell $(TARGET_CC) --version)),)
 TARGET_GLOBAL_CFLAGS += -Wno-unused-but-set-variable \
                         -fno-strict-volatile-bitfields
 endif
@@ -123,13 +115,10 @@ TARGET_GLOBAL_CFLAGS += -DPAGE_SHIFT=$(ARCH_MIPS_PAGE_SHIFT)
 endif
 
 TARGET_GLOBAL_LDFLAGS += \
-			-Wl,-z,noexecstack \
-			-Wl,-z,relro \
-			-Wl,-z,now \
-			-Wl,--warn-shared-textrel \
 			$(arch_variant_ldflags)
 
-TARGET_GLOBAL_CPPFLAGS += -fvisibility-inlines-hidden
+TARGET_GLOBAL_CPPFLAGS += -fvisibility-inlines-hidden \
+				-fno-use-cxa-atexit
 
 # More flags/options can be added here
 TARGET_RELEASE_CFLAGS := \
@@ -165,7 +154,7 @@ TARGET_FDO_CFLAGS:=
 TARGET_FDO_LIB:=
 
 target_libgcov := $(shell $(TARGET_CC) $(TARGET_GLOBAL_CFLAGS) \
-        -print-file-name=libgcov.a)
+        --print-file-name=libgcov.a)
 ifneq ($(strip $(BUILD_FDO_INSTRUMENT)),)
   # Set BUILD_FDO_INSTRUMENT=true to turn on FDO instrumentation.
   # The profile will be generated on /data/local/tmp/profile on the device.
@@ -225,11 +214,16 @@ TARGET_DEFAULT_SYSTEM_SHARED_LIBRARIES := libc libstdc++ libm
 
 TARGET_CUSTOM_LD_COMMAND := true
 
+# Enable the Dalvik JIT compiler if not already specified.
+ifeq ($(strip $(WITH_JIT)),)
+    WITH_JIT := true
+endif
+
 define transform-o-to-shared-lib-inner
 $(hide) $(PRIVATE_CXX) \
 	-nostdlib -Wl,-soname,$(notdir $@) \
 	-Wl,--gc-sections \
-	-Wl,-shared,-Bsymbolic \
+	-shared -Bsymbolic \
 	$(PRIVATE_TARGET_GLOBAL_LD_DIRS) \
 	$(if $(filter true,$(PRIVATE_NO_CRT)),,$(PRIVATE_TARGET_CRTBEGIN_SO_O)) \
 	$(PRIVATE_ALL_OBJECTS) \
@@ -239,7 +233,6 @@ $(hide) $(PRIVATE_CXX) \
 	$(if $(PRIVATE_GROUP_STATIC_LIBRARIES),-Wl$(comma)--start-group) \
 	$(call normalize-target-libraries,$(PRIVATE_ALL_STATIC_LIBRARIES)) \
 	$(if $(PRIVATE_GROUP_STATIC_LIBRARIES),-Wl$(comma)--end-group) \
-	$(PRIVATE_TARGET_LIBGCC) \
 	$(call normalize-target-libraries,$(PRIVATE_ALL_SHARED_LIBRARIES)) \
 	-o $@ \
 	$(PRIVATE_TARGET_GLOBAL_LDFLAGS) \
@@ -250,23 +243,19 @@ $(hide) $(PRIVATE_CXX) \
 endef
 
 define transform-o-to-executable-inner
-$(hide) $(PRIVATE_CXX) -nostdlib -Bdynamic -fPIE -pie \
+$(hide) $(PRIVATE_CXX) -nostdlib -Bdynamic \
 	-Wl,-dynamic-linker,/system/bin/linker \
 	-Wl,--gc-sections \
 	-Wl,-z,nocopyreloc \
+	-o $@ \
 	$(PRIVATE_TARGET_GLOBAL_LD_DIRS) \
 	-Wl,-rpath-link=$(TARGET_OUT_INTERMEDIATE_LIBRARIES) \
+	$(call normalize-target-libraries,$(PRIVATE_ALL_SHARED_LIBRARIES)) \
 	$(if $(filter true,$(PRIVATE_NO_CRT)),,$(PRIVATE_TARGET_CRTBEGIN_DYNAMIC_O)) \
 	$(PRIVATE_ALL_OBJECTS) \
-	-Wl,--whole-archive \
-	$(call normalize-target-libraries,$(PRIVATE_ALL_WHOLE_STATIC_LIBRARIES)) \
-	-Wl,--no-whole-archive \
 	$(if $(PRIVATE_GROUP_STATIC_LIBRARIES),-Wl$(comma)--start-group) \
 	$(call normalize-target-libraries,$(PRIVATE_ALL_STATIC_LIBRARIES)) \
 	$(if $(PRIVATE_GROUP_STATIC_LIBRARIES),-Wl$(comma)--end-group) \
-	$(PRIVATE_TARGET_LIBGCC) \
-	$(call normalize-target-libraries,$(PRIVATE_ALL_SHARED_LIBRARIES)) \
-	-o $@ \
 	$(PRIVATE_TARGET_GLOBAL_LDFLAGS) \
 	$(PRIVATE_LDFLAGS) \
 	$(PRIVATE_TARGET_FDO_LIB) \
@@ -283,9 +272,6 @@ $(hide) $(PRIVATE_CXX) -nostdlib -Bstatic \
 	$(PRIVATE_TARGET_GLOBAL_LDFLAGS) \
 	$(PRIVATE_LDFLAGS) \
 	$(PRIVATE_ALL_OBJECTS) \
-	-Wl,--whole-archive \
-	$(call normalize-target-libraries,$(PRIVATE_ALL_WHOLE_STATIC_LIBRARIES)) \
-	-Wl,--no-whole-archive \
 	$(call normalize-target-libraries,$(filter-out %libc_nomalloc.a,$(filter-out %libc.a,$(PRIVATE_ALL_STATIC_LIBRARIES)))) \
 	-Wl,--start-group \
 	$(call normalize-target-libraries,$(filter %libc.a,$(PRIVATE_ALL_STATIC_LIBRARIES))) \

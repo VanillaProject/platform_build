@@ -119,7 +119,7 @@ ifeq ($(strip $(LOCAL_ADDRESS_SANITIZER)),true)
 endif
 
 # Add in libcompiler-rt for all regular device builds
-ifeq (,$(LOCAL_SDK_VERSION)$(LOCAL_IS_HOST_MODULE)$(WITHOUT_LIBCOMPILER_RT))
+ifeq (,$(LOCAL_SDK_VERSION)$(LOCAL_IS_HOST_MODULE)$(BUILD_TINY_ANDROID))
   LOCAL_STATIC_LIBRARIES += $(COMPILER_RT_CONFIG_EXTRA_STATIC_LIBRARIES)
 endif
 
@@ -552,6 +552,11 @@ all_objects := \
     $(lex_objects) \
     $(proto_generated_objects) \
     $(addprefix $(TOPDIR)$(LOCAL_PATH)/,$(LOCAL_PREBUILT_OBJ_FILES))
+
+# Allow a device's own headers to take precedence over global ones
+ifneq ($(TARGET_SPECIFIC_HEADER_PATH),)
+LOCAL_C_INCLUDES := $(TOPDIR)$(TARGET_SPECIFIC_HEADER_PATH) $(LOCAL_C_INCLUDES)
+endif
 
 LOCAL_C_INCLUDES += $(TOPDIR)$(LOCAL_PATH) $(intermediates)
 

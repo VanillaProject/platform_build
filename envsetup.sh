@@ -31,7 +31,7 @@ function get_abs_build_var()
         echo "Couldn't locate the top of the tree.  Try setting TOP." >&2
         return
     fi
-    (\cd $T; CALLED_FROM_SETUP=true BUILD_SYSTEM=build/core \
+    (cd $T; CALLED_FROM_SETUP=true BUILD_SYSTEM=build/core \
       make --no-print-directory -C "$T" -f build/core/config.mk dumpvar-abs-$1)
 }
 
@@ -55,6 +55,14 @@ function check_product()
         echo "Couldn't locate the top of the tree.  Try setting TOP." >&2
         return
     fi
+
+    if (echo -n $1 | grep -q -e "^aosp_") ; then
+        AOSP_BUILD=$(echo -n $1 | sed -e 's/^aosp_//g')
+    else
+        AOSP_BUILD=
+    fi
+    export AOSP_BUILD
+
     CALLED_FROM_SETUP=true BUILD_SYSTEM=build/core \
         TARGET_PRODUCT=$1 \
         TARGET_BUILD_VARIANT= \
@@ -116,19 +124,15 @@ function setpaths()
     prebuiltdir=$(getprebuilt)
     gccprebuiltdir=$(get_abs_build_var ANDROID_GCC_PREBUILTS)
 
-    # defined in core/config.mk
-    targetgccversion=$(get_build_var TARGET_GCC_VERSION)
-    export TARGET_GCC_VERSION=$targetgccversion
-
     # The gcc toolchain does not exists for windows/cygwin. In this case, do not reference it.
     export ANDROID_EABI_TOOLCHAIN=
     local ARCH=$(get_build_var TARGET_ARCH)
     case $ARCH in
-        x86) toolchaindir=x86/i686-linux-android-$targetgccversion/bin
+        x86) toolchaindir=x86/i686-linux-android-4.6/bin
             ;;
-        arm) toolchaindir=arm/arm-linux-androideabi-$targetgccversion/bin
+        arm) toolchaindir=arm/arm-linux-androideabi-4.6/bin
             ;;
-        mips) toolchaindir=mips/mipsel-linux-android-$targetgccversion/bin
+        mips) toolchaindir=mips/mipsel-linux-android-4.6/bin
             ;;
         *)
             echo "Can't find toolchain for unknown architecture: $ARCH"
@@ -142,7 +146,7 @@ function setpaths()
     unset ARM_EABI_TOOLCHAIN ARM_EABI_TOOLCHAIN_PATH
     case $ARCH in
         arm)
-            toolchaindir=arm/arm-eabi-$targetgccversion/bin
+            toolchaindir=arm/arm-eabi-4.6/bin
             if [ -d "$gccprebuiltdir/$toolchaindir" ]; then
                  export ARM_EABI_TOOLCHAIN="$gccprebuiltdir/$toolchaindir"
                  ARM_EABI_TOOLCHAIN_PATH=":$gccprebuiltdir/$toolchaindir"
@@ -157,7 +161,7 @@ function setpaths()
 
     export ANDROID_TOOLCHAIN=$ANDROID_EABI_TOOLCHAIN
     export ANDROID_QTOOLS=$T/development/emulator/qtools
-    export ANDROID_DEV_SCRIPTS=$T/development/scripts:$T/prebuilts/devtools/tools
+    export ANDROID_DEV_SCRIPTS=$T/development/scripts
     export ANDROID_BUILD_PATHS=$(get_build_var ANDROID_BUILD_PATHS):$ANDROID_QTOOLS:$ANDROID_TOOLCHAIN$ARM_EABI_TOOLCHAIN_PATH$CODE_REVIEWS:$ANDROID_DEV_SCRIPTS:
     export PATH=$ANDROID_BUILD_PATHS$PATH
 
@@ -474,6 +478,8 @@ function lunch()
     elif (echo -n $answer | grep -q -e "^[^\-][^\-]*-[^\-][^\-]*$")
     then
         selection=$answer
+    else #It is likely just the board name, assemble the combo for us
+        selection=ev_${answer}-eng
     fi
 
     if [ -z "$selection" ]
@@ -487,6 +493,17 @@ function lunch()
 
     local product=$(echo -n $selection | sed -e "s/-.*$//")
     check_product $product
+    if [ $? -ne 0 ]
+    then
+        # if we can't find a product, try to grab it off the AOSP github
+        T=$(gettop)
+        pushd $T > /dev/null
+        build/tools/roomservice.py $product
+        popd > /dev/null
+        check_product $product
+    else
+        build/tools/roomservice.py $product true
+    fi
     if [ $? -ne 0 ]
     then
         echo
@@ -533,6 +550,26 @@ function _lunch()
     return 0
 }
 complete -F _lunch lunch
+
+function find_deps() {
+
+    if [ -z "$TARGET_PRODUCT" ]
+    then
+        echo "TARGET_PRODUCT not set..."
+        lunch
+    fi
+
+    build/tools/roomservice.py $TARGET_PRODUCT true
+    if [ $? -ne 0 ]
+    then
+        echo "find_deps failed."
+    fi
+}
+
+function breakfast()
+{
+    lunch $@
+}
 
 # Configures the build to build unbundled apps.
 # Run tapas with one ore more app names (from LOCAL_PACKAGE_NAME)
@@ -584,13 +621,16 @@ function gettop
             # faked up with symlink names.
             PWD= /bin/pwd
         else
+            # We redirect cd to /dev/null in case it's aliased to
+            # a command that prints something as a side-effect
+            # (like pushd)
             local HERE=$PWD
             T=
             while [ \( ! \( -f $TOPFILE \) \) -a \( $PWD != "/" \) ]; do
-                \cd ..
+                cd .. > /dev/null
                 T=`PWD= /bin/pwd`
             done
-            \cd $HERE
+            cd $HERE > /dev/null
             if [ -f "$T/$TOPFILE" ]; then
                 echo $T
             fi
@@ -611,18 +651,21 @@ function m()
 function findmakefile()
 {
     TOPFILE=build/core/envsetup.mk
+    # We redirect cd to /dev/null in case it's aliased to
+    # a command that prints something as a side-effect
+    # (like pushd)
     local HERE=$PWD
     T=
     while [ \( ! \( -f $TOPFILE \) \) -a \( $PWD != "/" \) ]; do
         T=`PWD= /bin/pwd`
         if [ -f "$T/Android.mk" ]; then
             echo $T/Android.mk
-            \cd $HERE
+            cd $HERE > /dev/null
             return
         fi
-        \cd ..
+        cd .. > /dev/null
     done
-    \cd $HERE
+    cd $HERE > /dev/null
 }
 
 function mm()
@@ -664,7 +707,7 @@ function mmm()
             fi
             DIR=`echo $DIR | sed -e 's/:.*//' -e 's:/$::'`
             if [ -f $DIR/Android.mk ]; then
-                TO_CHOP=`(\cd -P -- $T && pwd -P) | wc -c | tr -d ' '`
+                TO_CHOP=`(cd -P -- $T && pwd -P) | wc -c | tr -d ' '`
                 TO_CHOP=`expr $TO_CHOP + 1`
                 START=`PWD= /bin/pwd`
                 MFILE=`echo $START | cut -c${TO_CHOP}-`
@@ -699,7 +742,7 @@ function croot()
 {
     T=$(gettop)
     if [ "$T" ]; then
-        \cd $(gettop)
+        cd $(gettop)
     else
         echo "Couldn't locate the top of the tree.  Try setting TOP."
     fi
@@ -708,17 +751,20 @@ function croot()
 function cproj()
 {
     TOPFILE=build/core/envsetup.mk
+    # We redirect cd to /dev/null in case it's aliased to
+    # a command that prints something as a side-effect
+    # (like pushd)
     local HERE=$PWD
     T=
     while [ \( ! \( -f $TOPFILE \) \) -a \( $PWD != "/" \) ]; do
         T=$PWD
         if [ -f "$T/Android.mk" ]; then
-            \cd $T
+            cd $T
             return
         fi
-        \cd ..
+        cd .. > /dev/null
     done
-    \cd $HERE
+    cd $HERE > /dev/null
     echo "can't find Android.mk"
 }
 
@@ -737,45 +783,7 @@ function pid()
 # to the usual ANR traces file
 function systemstack()
 {
-    stacks system_server
-}
-
-function stacks()
-{
-    if [[ $1 =~ ^[0-9]+$ ]] ; then
-        local PID="$1"
-    elif [ "$1" ] ; then
-        local PID=$(pid $1)
-    else
-        echo "usage: stacks [pid|process name]"
-    fi
-
-    if [ "$PID" ] ; then
-        local TRACES=/data/anr/traces.txt
-        local ORIG=/data/anr/traces.orig
-        local TMP=/data/anr/traces.tmp
-
-        # Keep original traces to avoid clobbering
-        adb shell mv $TRACES $ORIG
-
-        # Make sure we have a usable file
-        adb shell touch $TRACES
-        adb shell chmod 666 $TRACES
-
-        # Dump stacks and wait for dump to finish
-        adb shell kill -3 $PID
-        adb shell notify $TRACES
-
-        # Restore original stacks, and show current output
-        adb shell mv $TRACES $TMP
-        adb shell mv $ORIG $TRACES
-        adb shell cat $TMP | less -S
-    fi
-}
-
-function gdbwrapper()
-{
-    $ANDROID_TOOLCHAIN/$GDB -x "$@"
+    adb shell echo '""' '>>' /data/anr/traces.txt && adb shell chmod 776 /data/anr/traces.txt && adb shell kill -3 $(pid system_server)
 }
 
 function gdbclient()
@@ -834,7 +842,7 @@ function gdbclient()
        echo >>"$OUT_ROOT/gdbclient.cmds" "target remote $PORT"
        echo >>"$OUT_ROOT/gdbclient.cmds" ""
 
-       gdbwrapper "$OUT_ROOT/gdbclient.cmds" "$OUT_EXE_SYMBOLS/$EXE"
+       $ANDROID_TOOLCHAIN/$GDB -x "$OUT_ROOT/gdbclient.cmds" "$OUT_EXE_SYMBOLS/$EXE"
   else
        echo "Unable to determine build system output dir."
    fi
@@ -875,16 +883,6 @@ function cgrep()
 function resgrep()
 {
     for dir in `find . -name .repo -prune -o -name .git -prune -o -name res -type d`; do find $dir -type f -name '*\.xml' -print0 | xargs -0 grep --color -n "$@"; done;
-}
-
-function mangrep()
-{
-    find . -name .repo -prune -o -name .git -prune -o -path ./out -prune -o -type f -name 'AndroidManifest.xml' -print0 | xargs -0 grep --color -n "$@"
-}
-
-function sepgrep()
-{
-    find . -name .repo -prune -o -name .git -prune -o -path ./out -prune -o -name sepolicy -type d -print0 | xargs -0 grep --color -n -r --exclude-dir=\.git "$@"
 }
 
 case `uname -s` in
@@ -1106,7 +1104,7 @@ function smoketest()
         return
     fi
 
-    (\cd "$T" && mmm tests/SmokeTest) &&
+    (cd "$T" && mmm tests/SmokeTest) &&
       adb uninstall com.android.smoketest > /dev/null &&
       adb uninstall com.android.smoketest.tests > /dev/null &&
       adb install $ANDROID_PRODUCT_OUT/data/app/SmokeTestApp.apk &&
@@ -1133,7 +1131,7 @@ function godir () {
     T=$(gettop)
     if [[ ! -f $T/filelist ]]; then
         echo -n "Creating index..."
-        (\cd $T; find . -wholename ./out -prune -o -wholename ./.repo -prune -o -type f > filelist)
+        (cd $T; find . -wholename ./out -prune -o -wholename ./.repo -prune -o -type f > filelist)
         echo " Done"
         echo ""
     fi
@@ -1166,7 +1164,50 @@ function godir () {
     else
         pathname=${lines[0]}
     fi
-    \cd $T/$pathname
+    cd $T/$pathname
+}
+
+function cleantree () {
+    read -p "Are you sure you want to erase local changes? (y|N)" ans
+    test "$ans" = "Y" || test "$ans" = "y" || return
+    if [ ! "$ANDROID_BUILD_TOP" ]; then
+        export ANDROID_BUILD_TOP=$(gettop)
+    fi
+    if [ "$(pwd)" != "$ANDROID_BUILD_TOP" ]; then
+        cd "$ANDROID_BUILD_TOP"
+    fi
+    echo "Cleaning tree...This will take a few minutes"
+    repo forall -c git reset --hard >/dev/null 2>&1
+    repo forall -c git clean -fd >/dev/null 2>&1
+    repo sync -fd >/dev/null 2>&1
+    echo "Done"
+}
+
+function aospremote() {
+    git remote rm aosp 2> /dev/null
+    if [ ! -d .git ]
+    then
+        echo .git directory not found. Please run this from the root directory of the Android repository you wish to set up.
+    fi
+    if [ ! "$ANDROID_BUILD_TOP" ]; then
+        export ANDROID_BUILD_TOP=$(gettop)
+    fi
+    PROJECT=`pwd | sed s#$ANDROID_BUILD_TOP/##g`
+    if (echo $PROJECT | grep -qv "^device")
+    then
+        PFX="platform/"
+    fi
+    git remote add aosp https://android.googlesource.com/$PFX$PROJECT
+    echo "Remote 'aosp' created"
+}
+
+function repodiff() {
+    if [ -z "$*" ]; then
+        echo "Usage: repodiff <ref-from> [[ref-to] [--numstat]]"
+        return
+    fi
+    diffopts=$* repo forall -c \
+      'echo "$REPO_PATH ($REPO_REMOTE)"; git diff ${diffopts} 2>/dev/null ;'
 }
 
 # Force JAVA_HOME to point to java 1.6 if it isn't already set
@@ -1194,7 +1235,7 @@ if [ "x$SHELL" != "x/bin/bash" ]; then
 fi
 
 # Execute the contents of any vendorsetup.sh files we can find.
-for f in `/bin/ls vendor/*/vendorsetup.sh vendor/*/*/vendorsetup.sh device/*/*/vendorsetup.sh 2> /dev/null`
+for f in `/bin/ls vendor/*/vendorsetup.sh vendor/*/*/vendorsetup.sh 2> /dev/null`
 do
     echo "including $f"
     . $f

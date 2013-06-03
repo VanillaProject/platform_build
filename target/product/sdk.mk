@@ -20,18 +20,13 @@ PRODUCT_PROPERTY_OVERRIDES :=
 PRODUCT_PACKAGES := \
 	Calculator \
 	DeskClock \
-	Email \
+	Email2 \
 	Exchange2 \
 	FusedLocation \
 	Gallery \
 	Music \
 	Mms \
-	OpenWnn \
-	libWnnEngDic \
-	libWnnJpnDic \
-	libwnndict \
 	Phone \
-	PinyinIME \
 	Protips \
 	SoftKeyboard \
 	SystemUI \
@@ -53,6 +48,11 @@ PRODUCT_PACKAGES := \
 	CubeLiveWallpapers \
 	QuickSearchBox \
 	WidgetPreview \
+	monkeyrunner \
+	guavalib \
+	jsr305lib \
+	jython \
+	jsilver \
 	librs_jni \
 	ConnectivityTest \
 	GpsLocationTest \
@@ -63,7 +63,6 @@ PRODUCT_PACKAGES := \
 	rild \
 	LegacyCamera
 
-include $(SRC_TARGET_DIR)/product/emulator.mk
 
 # Define the host tools and libs that are parts of the SDK.
 -include sdk/build/product_sdk.mk

@@ -65,6 +65,7 @@ endef
 #
 
 _product_var_list := \
+    PRODUCT_BUILD_PROP_OVERRIDES \
     PRODUCT_NAME \
     PRODUCT_MODEL \
     PRODUCT_LOCALES \
@@ -209,7 +210,6 @@ endef
 _product_stash_var_list := $(_product_var_list) \
 	TARGET_ARCH \
 	TARGET_ARCH_VARIANT \
-	TARGET_CPU_VARIANT \
 	TARGET_BOARD_PLATFORM \
 	TARGET_BOARD_PLATFORM_GPU \
 	TARGET_BOARD_KERNEL_HEADERS \

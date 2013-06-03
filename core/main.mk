@@ -44,10 +44,9 @@ ifeq (0,$(shell expr $$(echo $(MAKE_VERSION) | sed "s/[^0-9\.].*//") = 3.81))
 ifeq (0,$(shell expr $$(echo $(MAKE_VERSION) | sed "s/[^0-9\.].*//") = 3.82))
 $(warning ********************************************************************************)
 $(warning *  You are using version $(MAKE_VERSION) of make.)
-$(warning *  Android can only be built by versions 3.81 and 3.82.)
+$(warning *  Android is tested to build with versions 3.81 and 3.82.)
 $(warning *  see https://source.android.com/source/download.html)
 $(warning ********************************************************************************)
-$(error stopping)
 endif
 endif
 endif
@@ -121,43 +120,35 @@ $(warning ************************************************************)
 $(error Directory names containing spaces not supported)
 endif
 
-# Check for the corrent jdk
-ifneq ($(shell java -version 2>&1 | grep -i openjdk),)
-$(info ************************************************************)
-$(info You are attempting to build with an unsupported JDK.)
-$(info $(space))
-$(info You use OpenJDK but only Sun/Oracle JDK is supported.)
-$(info Please follow the machine setup instructions at)
-$(info $(space)$(space)$(space)$(space)https://source.android.com/source/download.html)
-$(info ************************************************************)
-$(error stop)
-endif
 
 # Check for the correct version of java
-java_version := $(shell java -version 2>&1 | head -n 1 | grep '^java .*[ "]1\.6[\. "$$]')
+java_version := $(shell java -version 2>&1 | head -n 1 | grep '^java .*[ "]1\.[67][\. "$$]')
+ifneq ($(shell java -version 2>&1 | grep -i openjdk),)
+$(warning *****************  OpenJDK Detected  ******************)
+#java_version :=
+endif
 ifeq ($(strip $(java_version)),)
 $(info ************************************************************)
-$(info You are attempting to build with the incorrect version)
+$(info You are attempting to build with an unsupported version)
 $(info of java.)
 $(info $(space))
 $(info Your version is: $(shell java -version 2>&1 | head -n 1).)
-$(info The correct version is: Java SE 1.6.)
+$(info The correct version is: Java SE 1.6 or 1.7.)
 $(info $(space))
 $(info Please follow the machine setup instructions at)
 $(info $(space)$(space)$(space)$(space)https://source.android.com/source/download.html)
 $(info ************************************************************)
-$(error stop)
 endif
 
 # Check for the correct version of javac
-javac_version := $(shell javac -version 2>&1 | head -n 1 | grep '[ "]1\.6[\. "$$]')
+javac_version := $(shell javac -version 2>&1 | head -n 1 | grep '[ "]1\.[67][\. "$$]')
 ifeq ($(strip $(javac_version)),)
 $(info ************************************************************)
 $(info You are attempting to build with the incorrect version)
 $(info of javac.)
 $(info $(space))
 $(info Your version is: $(shell javac -version 2>&1 | head -n 1).)
-$(info The correct version is: 1.6.)
+$(info The correct version is: 1.6 or 1.7.)
 $(info $(space))
 $(info Please follow the machine setup instructions at)
 $(info $(space)$(space)$(space)$(space)https://source.android.com/source/download.html)
@@ -166,7 +157,7 @@ $(error stop)
 endif
 
 ifeq (darwin,$(HOST_OS))
-GCC_REALPATH = $(realpath $(shell which $(HOST_CC)))
+GCC_REALPATH = $(realpath $(shell which gcc))
 ifneq ($(findstring llvm-gcc,$(GCC_REALPATH)),)
   # Using LLVM GCC results in a non functional emulator due to it
   # not honouring global register variables
@@ -177,6 +168,23 @@ ifneq ($(findstring llvm-gcc,$(GCC_REALPATH)),)
   BUILD_EMULATOR := false
 else
   BUILD_EMULATOR := true
+endif
+# When building on Leopard or above, we need to use the 10.4 SDK
+# or the generated binary will not run on Tiger.
+darwin_version := $(strip $(shell sw_vers -productVersion))
+ifneq ($(filter 10.1 10.2 10.3 10.1.% 10.2.% 10.3.% 10.4 10.4.%,$(darwin_version)),)
+    $(error Building the Android emulator requires OS X 10.5 or above)
+endif
+ifneq ($(filter 10.5 10.5.% 10.6 10.6.%,$(darwin_version)),)
+    # We are on Leopard or Snow Leopard
+    MSDK=10.5
+else
+    # We are on Lion or beyond, and 10.6 SDK is the minimum in Xcode 4.x
+   MSDK=10.6
+endif
+MACOSX_SDK := /Developer/SDKs/MacOSX$(MSDK).sdk
+ifeq ($(strip $(wildcard $(MACOSX_SDK))),)
+  BUILD_EMULATOR := false
 endif
 else   # HOST_OS is not darwin
   BUILD_EMULATOR := true
@@ -216,6 +224,9 @@ endif
 
 # Bring in standard build system definitions.
 include $(BUILD_SYSTEM)/definitions.mk
+
+# Bring in Qualcomm helper macros
+include $(BUILD_SYSTEM)/qcom_utils.mk
 
 # Bring in dex_preopt.mk
 include $(BUILD_SYSTEM)/dex_preopt.mk
@@ -266,6 +277,11 @@ ifneq ($(filter sdk win_sdk sdk_addon,$(MAKECMDGOALS)),)
 is_sdk_build := true
 endif
 
+## have selinux ##
+ifeq ($(HAVE_SELINUX),true)
+ADDITIONAL_BUILD_PROPERTIES += ro.build.selinux=1
+endif # HAVE_SELINUX
+
 ## user/userdebug ##
 
 user_variant := $(filter user userdebug,$(TARGET_BUILD_VARIANT))
@@ -301,8 +317,6 @@ ifneq (,$(user_variant))
   ADDITIONAL_DEFAULT_PROPERTIES += ro.allow.mock.location=0
 
 else # !user_variant
-  # Turn on checkjni for non-user builds.
-  ADDITIONAL_BUILD_PROPERTIES += ro.kernel.android.checkjni=1
   # Set device insecure for non-user builds.
   ADDITIONAL_DEFAULT_PROPERTIES += ro.secure=0
   # Allow mock locations by default for non user builds
@@ -430,8 +444,8 @@ SDK_ONLY := true
 endif
 
 ifeq ($(SDK_ONLY),true)
-include $(TOPDIR)sdk/build/windows_sdk_whitelist.mk
-include $(TOPDIR)development/build/windows_sdk_whitelist.mk
+include $(TOPDIR)sdk/build/sdk_only_whitelist.mk
+include $(TOPDIR)development/build/sdk_only_whitelist.mk
 
 # Exclude tools/acp when cross-compiling windows under linux
 ifeq ($(findstring Linux,$(UNAME)),)
@@ -439,12 +453,33 @@ subdirs += build/tools/acp
 endif
 
 else	# !SDK_ONLY
+ifeq ($(BUILD_TINY_ANDROID), true)
+
+# TINY_ANDROID is a super-minimal build configuration, handy for board
+# bringup and very low level debugging
+
+subdirs := \
+	bionic \
+	system/core \
+	system/extras/ext4_utils \
+	system/extras/su \
+	build/libs \
+	build/target \
+	build/tools/acp \
+	external/gcc-demangle \
+	external/mksh \
+	external/openssl \
+	external/yaffs2 \
+	external/zlib
+else	# !BUILD_TINY_ANDROID
 #
 # Typical build; include any Android.mk files we can find.
 #
 subdirs := $(TOP)
 
 FULL_BUILD := true
+
+endif	# !BUILD_TINY_ANDROID
 
 endif	# !SDK_ONLY
 
@@ -643,7 +678,7 @@ ifdef is_sdk_build
   # TODO: Should we do this for all builds and not just the sdk?
   $(foreach m, $(PRODUCTS.$(INTERNAL_PRODUCT).PRODUCT_PACKAGES), \
     $(if $(strip $(ALL_MODULES.$(m).INSTALLED)),,\
-      $(error $(ALL_MODULES.$(m).MAKEFILE): Module '$(m)' in PRODUCT_PACKAGES has nothing to install!)))
+      $(warning $(ALL_MODULES.$(m).MAKEFILE): Module '$(m)' in PRODUCT_PACKAGES has nothing to install!)))
   $(foreach m, $(PRODUCTS.$(INTERNAL_PRODUCT).PRODUCT_PACKAGES_DEBUG), \
     $(if $(strip $(ALL_MODULES.$(m).INSTALLED)),,\
       $(warning $(ALL_MODULES.$(m).MAKEFILE): Module '$(m)' in PRODUCT_PACKAGES_DEBUG has nothing to install!)))
@@ -654,6 +689,9 @@ ifdef is_sdk_build
     $(if $(strip $(ALL_MODULES.$(m).INSTALLED)),,\
       $(warning $(ALL_MODULES.$(m).MAKEFILE): Module '$(m)' in PRODUCT_PACKAGES_TESTS has nothing to install!)))
 endif
+
+# Install all of the host modules
+modules_to_install += $(sort $(modules_to_install) $(ALL_HOST_INSTALLED_FILES))
 
 # build/core/Makefile contains extra stuff that we don't want to pollute this
 # top-level makefile with.  It expects that ALL_DEFAULT_INSTALLED_MODULES
@@ -737,6 +775,10 @@ cacheimage: $(INSTALLED_CACHEIMAGE_TARGET)
 
 .PHONY: bootimage
 bootimage: $(INSTALLED_BOOTIMAGE_TARGET)
+
+ifeq ($(BUILD_TINY_ANDROID), true)
+INSTALLED_RECOVERYIMAGE_TARGET :=
+endif
 
 # Build files and then package it into the rom formats
 .PHONY: droidcore
@@ -855,12 +897,20 @@ samplecode: $(sample_APKS_COLLECTION)
 findbugs: $(INTERNAL_FINDBUGS_HTML_TARGET) $(INTERNAL_FINDBUGS_XML_TARGET)
 
 .PHONY: clean
+dirs_to_clean := \
+	$(PRODUCT_OUT) \
+	$(TARGET_COMMON_OUT_ROOT)
 clean:
-	@rm -rf $(OUT_DIR)
-	@echo "Entire build directory removed."
+	@for dir in $(dirs_to_clean) ; do \
+	echo "Cleaning $$dir..."; \
+	rm -rf $$dir; \
+	done
+	@echo "Clean."; \
 
 .PHONY: clobber
-clobber: clean
+clobber:
+	@rm -rf $(OUT_DIR)
+	@echo "Entire build directory removed."
 
 # The rules for dataclean and installclean are defined in cleanbuild.mk.
 
